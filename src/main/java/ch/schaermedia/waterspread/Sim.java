@@ -15,10 +15,12 @@ import processing.event.MouseEvent;
  */
 public class Sim extends PApplet {
 
+    private final float DEPTH_MIN = -127;
+    private final float DEPTH_MAX = 127;
+
+    private final int NUMBER_OF_LAYERS = 2;
     private final int VALUE_LAYER_IDX = 0;
-    private final int INBOUND_LAYER_IDX = 1;
-    private final int OUTBOUND_LAYER_IDX = 2;
-    private final int AVERAGE_LAYER_IDX = 3;
+    private final int DIFF_LAYER_IDX = 1;
 
     private int cols;
     private int rows;
@@ -56,6 +58,30 @@ public class Sim extends PApplet {
         image(gr, 0, 0);
     }
 
+    private float toWithinValueRange(float value) {
+      if(value > DEPTH_MAX){
+        return DEPTH_MAX;
+      }
+
+      if(value < DEPTH_MIN) {
+        return DEPTH_MIN;
+      }
+
+      return value;
+    }
+
+    private void clickModifyCoordinate(int x, int y, MouseEvent event) {
+      float add = 0;
+
+      if (event.getButton() == LEFT) {
+        add = 50;
+      } else {
+        add = -50;
+      }
+
+      grid[DIFF_LAYER_IDX][x][y] = toWithinValueRange(grid[DIFF_LAYER_IDX][x][y] + add);
+    }
+
     @Override
     public void mouseDragged(MouseEvent event) {
         if (mouseX < 0 || mouseX >= width || mouseY < 0 || mouseY >= height) {
@@ -68,135 +94,77 @@ public class Sim extends PApplet {
 
         for (int x = mx - radius; x <= mx + radius; x++) {
             for (int y = my - radius; y <= my + radius; y++) {
+              if (x < 0 || x >= cols || y < 0 || y >= rows) {
+                  continue;
+              }
 
-                if (x < 0 || x >= cols || y < 0 || y >= rows) {
-                    continue;
-                }
-                if (event.getButton() == LEFT) {
-                    grid[INBOUND_LAYER_IDX][x][y] += 50;
-                } else {
-                    float lower = grid[VALUE_LAYER_IDX][x][y] - 50;
-                    if (lower < 0) {
-                        lower = 0;
-                    }
-                    grid[VALUE_LAYER_IDX][x][y] = lower;
-                }
-
-            }
+              clickModifyCoordinate(x, y, event);
+          }
         }
-
     }
 
-    public void mousePressed() {
+    public void mousePressed(MouseEvent event) {
         if (mouseX < 0 || mouseX >= width || mouseY < 0 || mouseY >= height) {
             return;
         }
-        int mx = (int) Math.floor(mouseX / zoom);
-        int my = (int) Math.floor(mouseY / zoom);
-        grid[INBOUND_LAYER_IDX][mx][my] += 50;
+        int x = (int) Math.floor(mouseX / zoom);
+        int y = (int) Math.floor(mouseY / zoom);
 
+       clickModifyCoordinate(x, y, event);
     }
 
     private void renderToGraphic(PGraphics g, int x, int y) {
         //float value = (toUpdate[VALUE_LAYER_IDX][x][y]  + toCalculate[VALUE_LAYER_IDX][x][y]) / 2;
         float value = grid[VALUE_LAYER_IDX][x][y];
         int idx = x + y * cols;
-        if (value < 0) {
+        if (value < DEPTH_MIN) {
             // Render pixels with a negative (invalid) value in blue
             g.pixels[idx] = color(0, 0, 255);
+        } if (value > DEPTH_MAX) {
+            // Render pixels with a negative (invalid) value in red
+            g.pixels[idx] = color(255, 0, 0);
         } //else if (value - grid[AVERAGE_LAYER_IDX][x][y] < 0) {
-        // For debugging render pixels with a lower than average value in red
-        //            g.pixels[idx] = color(255, 0, 0);
+        // For debugging render pixels with a lower than average value in yellow
+        //            g.pixels[idx] = color(255, 255, 0);
         //}
         else {
             // Render the pixel in a rage from black to grey
-            g.pixels[idx] = color(value);
+            g.pixels[idx] = color(-DEPTH_MIN + value);
         }
     }
 
     private void update(int x, int y) {
-        // Adds the value flowing in from other cells and subtracts outwards flow
-        grid[VALUE_LAYER_IDX][x][y] = grid[VALUE_LAYER_IDX][x][y] + grid[INBOUND_LAYER_IDX][x][y] - grid[OUTBOUND_LAYER_IDX][x][y];
-        // Reset in and out flow
-        grid[INBOUND_LAYER_IDX][x][y] = 0;
-        grid[OUTBOUND_LAYER_IDX][x][y] = 0;
+        grid[VALUE_LAYER_IDX][x][y] = toWithinValueRange(grid[VALUE_LAYER_IDX][x][y] + grid[DIFF_LAYER_IDX][x][y]);
+        grid[DIFF_LAYER_IDX][x][y] = 0;
     }
 
-    private void calculate(int x, int y) {
+    private void calculate(int centerX, int centerY) {
+        float value = grid[VALUE_LAYER_IDX][centerX][centerY];
 
-        float value = grid[VALUE_LAYER_IDX][x][y];
+        int range = 3;
+        int neighborsInRange = 0;
+        float perNeighborDiff  = (value * 0.005);
 
-        float average;
-        float tospread = 0;
-        int range = 2;
-        average = calcAverage(x, y, range);
-        grid[AVERAGE_LAYER_IDX][x][y] = average;
-        tospread = value - average;
-        range++;
-        //tospread = (float) (tospread > 0 ? tospread : value > diffTotal ? diffTotal * 0.1 : 0);
-        if (tospread <= 0) {
-            return;
-        }
-
-        float totalFlow = 0;
-
-        float lowValue = Float.MAX_VALUE;
-        int numLowest = 0;
-        int[] lowX = new int[8];
-        int[] lowY = new int[8];
-        for (int nx = -1; nx <= 1; nx++) {
-            for (int ny = -1; ny <= 1; ny++) {
-//                if (nx != 0 && ny != 0) {
-//                    continue;
-//                }
-                if (nx == 0 && ny == 0) {
-                    continue;
-                }
-                int cx = x + nx;
-                int cy = y + ny;
-                if (cx < 0 || cy < 0 || cx > cols - 1 || cy > rows - 1) {
-                    continue;
-                }
-                if (grid[VALUE_LAYER_IDX][cx][cy] < lowValue) {
-                    lowValue = grid[VALUE_LAYER_IDX][cx][cy];
-                    numLowest = 0;
-                    lowX = new int[8];
-                    lowY = new int[8];
-
-                    lowX[numLowest] = cx;
-                    lowY[numLowest] = cy;
-                    numLowest++;
-                } else if (grid[VALUE_LAYER_IDX][cx][cy] == lowValue) {
-                    lowX[numLowest] = cx;
-                    lowY[numLowest] = cy;
-                    numLowest++;
-                }
-            }
-        }
-        float flow = (float) (tospread / numLowest);
-        for (int i = 0; i < numLowest; i++) {
-            grid[INBOUND_LAYER_IDX][lowX[i]][lowY[i]] += flow;
-            totalFlow += flow;
-
-        }
-        grid[OUTBOUND_LAYER_IDX][x][y] = totalFlow;
-    }
-
-    private float calcAverage(int centerX, int centerY, int range) {
-        float sum = 0;
-        int tiles = 0;
         for (int x = -range; x <= range; x++) {
             for (int y = -range; y <= range; y++) {
+                if (x == 0 && y == 0) {
+                  continue;
+                }
+
                 int cx = centerX + x;
                 int cy = centerY + y;
+
                 if (cx < 0 || cy < 0 || cx > cols - 1 || cy > rows - 1) {
                     continue;
                 }
-                sum += grid[VALUE_LAYER_IDX][cx][cy];
-                tiles++;
+
+                neighborsInRange++;
+
+                grid[DIFF_LAYER_IDX][cx][cy] += perNeighborDiff;
             }
         }
-        return sum / tiles;
+
+        grid[DIFF_LAYER_IDX][centerX][centerY] -= perNeighborDiff * neighborsInRange;
     }
 
     @Override
@@ -212,7 +180,7 @@ public class Sim extends PApplet {
 
         System.out.println("zoom: " + zoom);
 
-        grid = new float[4][cols][rows];
+        grid = new float[NUMBER_OF_LAYERS][cols][rows];
 
         frameRate(60);
     }
